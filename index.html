@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Dual Timer</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for Inter font and general body aesthetics */
+        body {
+            font-family: 'Inter', sans-serif;
+            @apply bg-gray-100 flex items-center justify-center min-h-screen p-4;
+        }
+
+        /* Basic styling for input focus */
+        input:focus {
+            @apply ring-2 ring-blue-500 ring-opacity-50 outline-none;
+        }
+
+        /* Style for disabled buttons */
+        button:disabled {
+            @apply opacity-50 cursor-not-allowed;
+        }
+
+        /* Message box styling */
+        #messageBox {
+            @apply fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50;
+        }
+
+        #messageBoxContent {
+            @apply bg-white p-6 rounded-lg shadow-xl text-center;
+        }
+
+        #messageBoxContent button {
+            @apply mt-4 px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition duration-300;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Message Box HTML -->
+    <div id="messageBox">
+        <div id="messageBoxContent">
+            <p id="messageText" class="text-lg font-semibold"></p>
+            <button onclick="hideMessageBox()">OK</button>
+        </div>
+    </div>
+
+    <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Dynamic Dual Timer</h1>
+
+        <div class="space-y-4 mb-6">
+            <div>
+                <label for="totalTime" class="block text-gray-700 text-sm font-medium mb-1">Total Time (minutes):</label>
+                <input type="number" id="totalTime" value="120" min="1"
+                       class="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:border-blue-500">
+            </div>
+            <div>
+                <label for="slots" class="block text-gray-700 text-sm font-medium mb-1">Number of Slots:</label>
+                <input type="number" id="slots" value="30" min="1"
+                       class="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:border-blue-500">
+            </div>
+        </div>
+
+        <div class="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4 mb-6 justify-center">
+            <button id="startButton"
+                    class="bg-green-600 text-white px-6 py-3 rounded-md font-semibold text-lg shadow-md hover:bg-green-700 transition duration-300 transform hover:scale-105">
+                Start Timers
+            </button>
+            <button id="pauseButton"
+                    class="bg-blue-600 text-white px-6 py-3 rounded-md font-semibold text-lg shadow-md hover:bg-blue-700 transition duration-300 transform hover:scale-105" disabled>
+                Pause
+            </button>
+            <button id="resetButton"
+                    class="bg-gray-400 text-white px-6 py-3 rounded-md font-semibold text-lg shadow-md hover:bg-gray-500 transition duration-300 transform hover:scale-105" disabled>
+                Reset
+            </button>
+        </div>
+
+        <div class="flex justify-around items-center space-x-4 mb-6">
+            <div class="text-center bg-blue-100 p-4 rounded-xl shadow-inner w-1/2">
+                <h2 class="text-lg font-semibold text-blue-800 mb-2">Slot Timer</h2>
+                <div id="slotTimerDisplay" class="text-5xl font-extrabold text-blue-600">00:00</div>
+                <button id="nextButton"
+                        class="mt-4 bg-yellow-500 text-white px-5 py-2 rounded-md font-semibold text-base shadow-md hover:bg-yellow-600 transition duration-300 transform hover:scale-105" disabled>
+                    Next Slot
+                </button>
+            </div>
+            <div class="text-center bg-purple-100 p-4 rounded-xl shadow-inner w-1/2">
+                <h2 class="text-lg font-semibold text-purple-800 mb-2">Total Timer</h2>
+                <div id="totalTimerDisplay" class="text-5xl font-extrabold text-purple-600">00:00</div>
+            </div>
+        </div>
+
+        <div id="statusMessage" class="text-center text-red-600 font-medium mt-4"></div>
+        <div id="remainingInfo" class="text-center text-gray-600 text-sm mt-2"></div>
+
+    </div>
+
+    <script>
+        // DOM Elements
+        const totalTimeInput = document.getElementById('totalTime');
+        const slotsInput = document.getElementById('slots');
+        const startButton = document.getElementById('startButton');
+        const pauseButton = document.getElementById('pauseButton');
+        const resetButton = document.getElementById('resetButton');
+        const nextButton = document.getElementById('nextButton');
+        const slotTimerDisplay = document.getElementById('slotTimerDisplay');
+        const totalTimerDisplay = document.getElementById('totalTimerDisplay');
+        const statusMessage = document.getElementById('statusMessage');
+        const remainingInfo = document.getElementById('remainingInfo');
+        const messageBox = document.getElementById('messageBox');
+        const messageText = document.getElementById('messageText');
+
+        // Timer Variables
+        let initialTotalTimeMinutes = 0;
+        let initialTotalSlots = 0;
+        let totalSecondsRemaining = 0; // Tracks overall remaining time (decrements independently)
+        let slotsRemaining = 0;       // Tracks slots yet to be started (including current)
+        let currentSlotDurationSeconds = 0; // The calculated duration for the current slot
+        let currentSlotStartTime = 0;      // Timestamp when the current slot started (for precise elapsed time within slot)
+        let isPaused = false;              // Flag to track pause state
+
+        let totalTimerIntervalId = null;
+        let slotTimerIntervalId = null;
+
+        /**
+         * Displays a custom message box to the user.
+         * Replaces alert() for better UI integration.
+         * @param {string} message - The message to display.
+         */
+        function showMessageBox(message) {
+            messageText.textContent = message;
+            messageBox.classList.remove('hidden');
+        }
+
+        /**
+         * Hides the custom message box.
+         */
+        function hideMessageBox() {
+            messageBox.classList.add('hidden');
+        }
+
+        /**
+         * Formats seconds into a MM:SS string.
+         * @param {number} totalSeconds - The total number of seconds.
+         * @returns {string} Formatted time string (MM:SS).
+         */
+        function formatTime(totalSeconds) {
+            const minutes = Math.floor(Math.abs(totalSeconds) / 60);
+            const seconds = Math.floor(Math.abs(totalSeconds) % 60);
+            const sign = totalSeconds < 0 ? "-" : "";
+            return `${sign}${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+
+        /**
+         * Disables/enables input fields and buttons based on timer running/paused state.
+         * This function is crucial for controlling user interaction based on the timer's state.
+         */
+        function setControlsState() {
+            // Determine if any timer is actively running (intervals are set)
+            const isAnyTimerRunning = totalTimerIntervalId !== null || slotTimerIntervalId !== null;
+
+            // Inputs (total time, slots) should be disabled if a session is active (running or paused)
+            totalTimeInput.disabled = isAnyTimerRunning || isPaused;
+            slotsInput.disabled = isAnyTimerRunning || isPaused;
+
+            // Start Button Logic:
+            if (isPaused) { // If currently paused, this button becomes "Resume"
+                startButton.disabled = false;
+                startButton.textContent = "Resume Timers";
+            } else if (!isAnyTimerRunning && totalSecondsRemaining === 0 && slotsRemaining === 0) {
+                // If not running, not paused, AND timers are at zero (initial state or after reset)
+                startButton.disabled = false;
+                startButton.textContent = "Start Timers";
+            } else if (!isAnyTimerRunning && totalSecondsRemaining > 0 && slotsRemaining > 0) {
+                // If not running, not paused, but has existing time/slots (e.g., after an automatic slot completion)
+                // This state should ideally not happen if `startNewSlot` properly chains, but for robustness
+                startButton.disabled = false;
+                startButton.textContent = "Start Timers";
+            } else { // If timers are actively running, disable the Start button
+                startButton.disabled = true;
+                startButton.textContent = "Start Timers";
+            }
+
+            // Pause Button Logic:
+            // Enabled if any timer is running OR if it's currently paused (to allow resuming)
+            // Also ensure it's not enabled if everything is completed (time/slots at 0)
+            pauseButton.disabled = !(isAnyTimerRunning || isPaused) || (totalSecondsRemaining <= 0 && slotsRemaining <= 0 && !isPaused);
+            pauseButton.textContent = isPaused ? "Resume" : "Pause"; // Toggle text
+
+            // Reset Button Logic:
+            // Enabled if any timer is running, or it's paused, or if the total time/slots have run out.
+            resetButton.disabled = !(isAnyTimerRunning || isPaused || (initialTotalTimeMinutes > 0 && totalSecondsRemaining <= 0 && slotsRemaining <= 0));
+
+
+            // Next Button Logic:
+            // Enabled only if timers are actively running (not paused) AND there are remaining slots.
+            nextButton.disabled = !(isAnyTimerRunning && !isPaused && slotsRemaining > 0 && totalSecondsRemaining > 0);
+        }
+
+        /**
+         * Updates the display for both total and slot timers, and remaining info.
+         */
+        function updateDisplays() {
+            // Calculate current slot time left based on its allocated duration and time spent
+            // Date.now() - currentSlotStartTime gives milliseconds elapsed in current slot
+            const elapsedInCurrentSlot = (Date.now() - currentSlotStartTime) / 1000;
+            const currentSlotTimeLeftSeconds = currentSlotDurationSeconds - elapsedInCurrentSlot;
+
+            slotTimerDisplay.textContent = formatTime(currentSlotTimeLeftSeconds);
+            totalTimerDisplay.textContent = formatTime(totalSecondsRemaining);
+
+            // Update remaining information text
+            if (totalSecondsRemaining > 0 && slotsRemaining > 0) {
+                 remainingInfo.textContent = `Remaining: ${formatTime(totalSecondsRemaining)} / ${slotsRemaining} slots`;
+            } else if (totalSecondsRemaining <= 0) {
+                remainingInfo.textContent = `All time used.`;
+            } else if (slotsRemaining <= 0) {
+                 remainingInfo.textContent = `All slots completed.`;
+            } else {
+                 remainingInfo.textContent = ''; // Clear if none of the above conditions met
+            }
+
+            // Apply red color for low time alerts
+            if (currentSlotTimeLeftSeconds <= 10 && currentSlotTimeLeftSeconds > 0) {
+                slotTimerDisplay.classList.add('text-red-600');
+            } else {
+                slotTimerDisplay.classList.remove('text-red-600');
+            }
+
+            if (totalSecondsRemaining <= 60 && totalSecondsRemaining > 0) {
+                totalTimerDisplay.classList.add('text-red-600');
+            } else {
+                totalTimerDisplay.classList.remove('text-red-600');
+            }
+        }
+
+        /**
+         * Starts the total timer countdown. This timer decrements independently
+         * of slot progression.
+         */
+        function startTotalTimer() {
+            if (totalTimerIntervalId) clearInterval(totalTimerIntervalId); // Clear any existing interval
+
+            totalTimerIntervalId = setInterval(() => {
+                if (!isPaused && totalSecondsRemaining > 0) { // Only decrement if not paused and time remains
+                    totalSecondsRemaining--;
+                    updateDisplays(); // Update all displays every second
+
+                    if (totalSecondsRemaining <= 0) {
+                        // If total time runs out, stop everything and show message
+                        stopAllTimers("Total time exhausted!");
+                    }
+                }
+            }, 1000); // Update every 1 second
+            setControlsState(); // Update button states after starting
+        }
+
+        /**
+         * Starts a new slot timer. This function dynamically recalculates the
+         * slot's duration based on the current total remaining time and slots.
+         */
+        function startNewSlot() {
+            if (slotTimerIntervalId) clearInterval(slotTimerIntervalId); // Clear any existing interval
+
+            // If no slots or time left, stop everything and exit
+            if (slotsRemaining <= 0 || totalSecondsRemaining <= 0) {
+                stopAllTimers("All slots completed or time exhausted!");
+                return;
+            }
+
+            // Recalculate duration for the current slot based on current total remaining and slots
+            currentSlotDurationSeconds = totalSecondsRemaining / slotsRemaining;
+            currentSlotStartTime = Date.now(); // Mark the precise start time of this new slot
+
+            statusMessage.textContent = `Slot ${initialTotalSlots - slotsRemaining + 1} of ${initialTotalSlots} started.`;
+            updateDisplays(); // Initial display update for the new slot
+
+            slotTimerIntervalId = setInterval(() => {
+                // The condition `currentSlotTimeLeftSeconds > 0` was causing the ReferenceError
+                // because `currentSlotTimeLeftSeconds` is calculated inside `updateDisplays`.
+                // We should rely on `elapsedInCurrentSlot` to check for slot completion.
+                if (!isPaused) {
+                    const elapsedInCurrentSlot = (Date.now() - currentSlotStartTime) / 1000;
+
+                    // Check if the current slot duration has passed
+                    if (elapsedInCurrentSlot >= currentSlotDurationSeconds) {
+                        clearInterval(slotTimerIntervalId); // Stop the current slot timer
+
+                        slotsRemaining--; // Decrement the count of remaining slots
+                        startNewSlot(); // Automatically start the next slot
+                    }
+                     updateDisplays(); // Update all displays every interval (for smoother countdown)
+                }
+            }, 100); // Update every 100ms for smoother slot timer (optional, 1000 for 1s intervals is also fine)
+            setControlsState(); // Update button states after starting a new slot
+        }
+
+        /**
+         * Stops all active timers (total and slot), resets display, and
+         * re-enables input fields and sets buttons to their initial state.
+         * @param {string} finalMessage - Message to display upon stopping.
+         */
+        function stopAllTimers(finalMessage) {
+            if (totalTimerIntervalId) clearInterval(totalTimerIntervalId);
+            if (slotTimerIntervalId) clearInterval(slotTimerIntervalId);
+
+            totalTimerIntervalId = null;
+            slotTimerIntervalId = null;
+            isPaused = false; // Ensure pause state is reset
+
+            // Reset time and slot counts for a fresh start if this is a full reset
+            if (finalMessage === "Timers reset.") {
+                totalSecondsRemaining = 0;
+                slotsRemaining = 0;
+            }
+
+            setControlsState(); // Update controls to reflect stopped state
+
+            // Clear timer displays
+            slotTimerDisplay.textContent = formatTime(0);
+            totalTimerDisplay.textContent = formatTime(0);
+            statusMessage.textContent = finalMessage;
+            remainingInfo.textContent = ''; // Clear remaining info
+
+            showMessageBox(finalMessage); // Show final message
+        }
+
+        /**
+         * Pauses both the total and slot timers.
+         */
+        function pauseTimers() {
+            if (totalTimerIntervalId) clearInterval(totalTimerIntervalId);
+            if (slotTimerIntervalId) clearInterval(slotTimerIntervalId);
+
+            totalTimerIntervalId = null;
+            slotTimerIntervalId = null;
+
+            isPaused = true; // Set pause flag
+            statusMessage.textContent = "Timers Paused.";
+            setControlsState(); // Update button states to "Resume" etc.
+        }
+
+        /**
+         * Resumes both timers from their current state.
+         */
+        function resumeTimers() {
+            isPaused = false; // Clear pause flag
+            statusMessage.textContent = "Timers Resumed.";
+            setControlsState(); // Update button states to "Pause" etc.
+
+            // Restart timers to resume from where they left off
+            startTotalTimer();
+            // Recalculate currentSlotStartTime to make slot timer resume accurately
+            const timeElapsedBeforePause = (Date.now() - currentSlotStartTime) / 1000;
+            currentSlotStartTime = Date.now() - (timeElapsedBeforePause * 1000); // This line is for seamless resume
+            startNewSlot(); // Restarting ensures dynamic adjustment if time passed
+        }
+
+        /**
+         * Handles the "Start Timers" button click event.
+         */
+        startButton.addEventListener('click', () => {
+            // Check for pause state first to allow resuming via this button
+            if (isPaused) {
+                resumeTimers();
+                return; // Exit after resuming
+            }
+
+            const totalTime = parseInt(totalTimeInput.value);
+            const slots = parseInt(slotsInput.value);
+
+            // Input validation
+            if (isNaN(totalTime) || totalTime <= 0) {
+                showMessageBox("Please enter a valid positive number for Total Time.");
+                return;
+            }
+            if (isNaN(slots) || slots <= 0) {
+                showMessageBox("Please enter a valid positive number for Number of Slots.");
+                return;
+            }
+            // Basic check to ensure there's at least 1 second per slot
+            if (totalTime * 60 < slots) {
+                 showMessageBox("Total time is too short for the number of slots specified. Ensure at least 1 second per slot.");
+                return;
+            }
+
+            // Initialize main timer variables
+            initialTotalTimeMinutes = totalTime;
+            initialTotalSlots = slots;
+            totalSecondsRemaining = initialTotalTimeMinutes * 60;
+            slotsRemaining = initialTotalSlots;
+            isPaused = false; // Ensure not paused on a fresh start
+
+            statusMessage.textContent = "Timers started!"; // Update status message
+            startTotalTimer(); // Start the total timer
+            startNewSlot();     // Start the first slot timer
+            setControlsState(); // Update button states after starting
+        });
+
+        /**
+         * Handles the "Pause/Resume" button click event.
+         */
+        pauseButton.addEventListener('click', () => {
+            if (isPaused) {
+                resumeTimers();
+            } else {
+                pauseTimers();
+            }
+        });
+
+        /**
+         * Handles the "Next Slot" button click event.
+         * Skips the current slot and immediately moves to the next, recalculating time.
+         */
+        nextButton.addEventListener('click', () => {
+            // Ensure there are slots left before advancing
+            if (slotsRemaining <= 1) { // If it's the last slot or no slots left
+                slotsRemaining--; // Decrement for final message
+                stopAllTimers("Last slot completed!");
+                return;
+            }
+
+            slotsRemaining--; // Decrement the count of remaining slots
+            startNewSlot(); // Start the next slot with new recalculation based on current totalSecondsRemaining
+            setControlsState(); // Update button states after slot change
+        });
+
+        /**
+         * Handles the "Reset" button click event.
+         * Stops all timers and resets the application to its initial state.
+         */
+        resetButton.addEventListener('click', () => {
+            stopAllTimers("Timers reset.");
+            // Reset displays to initial 00:00 (already handled by stopAllTimers for displays)
+            // Restore input field values to their initial captured state or defaults
+            totalTimeInput.value = initialTotalTimeMinutes || 120;
+            slotsInput.value = initialTotalSlots || 30;
+            setControlsState(); // Ensure controls are in initial reset state
+        });
+
+        // Initialize display and controls on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            // Set initial total time display based on input field value
+            totalTimerDisplay.textContent = formatTime(parseInt(totalTimeInput.value) * 60);
+            slotTimerDisplay.textContent = formatTime(0); // Slot timer starts at 0 initially
+
+            // Capture initial values from inputs for accurate reset later
+            initialTotalTimeMinutes = parseInt(totalTimeInput.value);
+            initialTotalSlots = parseInt(slotsInput.value);
+
+            setControlsState(); // Set initial state for all buttons and inputs
+        });
+    </script>
+</body>
+</html>
